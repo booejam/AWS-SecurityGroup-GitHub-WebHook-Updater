@@ -1,115 +1,91 @@
 import os
 import boto3
-import requests
-
+import urllib.request
+import json
 
 def get_github_ip_list():
-    """
-    Call the GitHub API to fetch their server IPs used for webhooks
-
-    :rtype: list
-    :return: List of IPs
-    """
-    response = requests.get('https://api.github.com/meta')
-    ips = response.json()
-    if 'hooks' in ips:
-        return ips['hooks']
-
-    raise ConnectionError("Error loading IPs from GitHub")
-
+    url = 'https://api.github.com/meta'
+    with urllib.request.urlopen(url) as response:
+        if response.status != 200:
+            raise ConnectionError("Failed to fetch GitHub IPs")
+        data = json.loads(response.read().decode())
+        return data.get("hooks", [])
 
 def get_aws_security_group(group_id):
-    """
-    Return the defined Security Group
-
-    :param group_id:
-    :type group_id: str
-    :return:
-    """
+    """Retrieve the EC2 Security Group"""
     ec2 = boto3.resource('ec2')
-    group = ec2.SecurityGroup(group_id)
-    if group.group_id == group_id:
-        return group
+    return ec2.SecurityGroup(group_id)
 
-    raise ConnectionError('Failed to retrieve security group from Amazon')
-
-
-def clear_security_group_rules(group):
-    """
-    Remove all existing ingress rules from the security group
-
-    :param group:
-    :return:
-    """
-    # Revoke all ingress rules
-    if group.ip_permissions:
-        group.revoke_ingress(IpPermissions=group.ip_permissions)
-        print("Cleared all existing ingress rules")
-
-    raise ConnectionError('Failed to revoke ingress rules')
-
+def check_rule_exists(rules, address, port):
+    """Check if IP + port already allowed"""
+    if "." in address:
+        rule_key = 'IpRanges'
+        range_key = 'CidrIp'
+    else:
+        rule_key = 'Ipv6Ranges'
+        range_key = 'CidrIpv6'
+        
+    for rule in rules:
+        if rule.get('FromPort') != port:
+            continue
+        for ip_range in rule.get(rule_key, []):
+            if ip_range.get(range_key) == address:
+                return True
+    return False
 
 def add_ingress_rule(group, address, port, description):
-    """
-    Add the IP address and port to the security group
-
-    :param group:
-    :param address:
-    :param port:
-    :param description:
-    :return:
-    """
+    """Add a new ingress rule to the SG"""
     if "." in address:
-        permissions = [
-            {
-                'IpProtocol': 'tcp',
-                'FromPort': port,
-                'ToPort': port,
-                'IpRanges': [
-                    {
-                        'CidrIp': address,
-                        'Description': description,
-                    }
-                ],
-            }
-        ]
+        permissions = [{
+            'IpProtocol': 'tcp',
+            'FromPort': port,
+            'ToPort': port,
+            'IpRanges': [{'CidrIp': address, 'Description': description}]
+        }]
     else:
-        permissions = [
-            {
-                'IpProtocol': 'tcp',
-                'FromPort': port,
-                'ToPort': port,
-                'Ipv6Ranges': [
-                    {
-                        'CidrIpv6': address,
-                        'Description': description,
-                    }
-                ],
-            }
-        ]
-    group.authorize_ingress(IpPermissions=permissions)
-    print(("Ingress rule from IP %s to Port %i has been added" % (address, port)))
+        permissions = [{
+            'IpProtocol': 'tcp',
+            'FromPort': port,
+            'ToPort': port,
+            'Ipv6Ranges': [{'CidrIpv6': address, 'Description': description}]
+        }]
+    
+    try:
+        group.authorize_ingress(IpPermissions=permissions)
+        print(f"Added ingress rule: {address}:{port}")
+    except Exception as e:
+        print(f"Failed to add rule for {address}:{port} - {str(e)}")
+
+def clear_security_group_ingress_rules(group):
+    """Optional: Clear all existing ingress rules"""
+    try:
+        if group.ip_permissions:
+            group.revoke_ingress(IpPermissions=group.ip_permissions)
+            print("Cleared existing ingress rules")
+    except Exception as e:
+        print(f"Failed to clear ingress rules: {str(e)}")
 
 def lambda_handler(event, context):
-    """
-    AWS lambda main func
+    # Load ports
+    ingress_ports = [int(port.strip()) for port in os.environ.get("INGRESS_PORTS_LIST", "443").split(",")]
 
-    :param event:
-    :param context:
-    :return:
-    """
-    ingress_ports = [int(port) for port in os.environ['INGRESS_PORTS_LIST'].split(",")]
-    if not ingress_ports:
-        ingress_ports = [443]
+    # Load Security Group
+    security_group_id = os.environ["SECURITY_GROUP_ID"]
+    security_group = get_aws_security_group("sg-02458291c7a58ee8d")
 
-    security_group = get_aws_security_group(os.environ['SECURITY_GROUP_ID'])
-    ip_addresses = get_github_ip_list()
-    description = "GitHub"
+    # Get GitHub IPs
+    github_ips = get_github_ip_list()
 
-    # Clear all existing rules
-    clear_security_group_rules(security_group)
+    # Optional: clear existing rules first
+    # Uncomment if you want to clean first
+    # clear_security_group_ingress_rules(security_group)
 
-    # Add new rules
-    for ip_address in ip_addresses:
+    description = "GitHub Webhook"
+
+    # Add missing rules
+    for ip in github_ips:
         for port in ingress_ports:
-            add_ingress_rule(security_group, ip_address, port, description)
+            if not check_rule_exists(security_group.ip_permissions, ip, port):
+                add_ingress_rule(security_group, ip, port, description)
+            else:
+                print(f"Rule exists: {ip}:{port}")
