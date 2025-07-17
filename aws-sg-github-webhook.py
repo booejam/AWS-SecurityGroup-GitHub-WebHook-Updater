@@ -36,7 +36,7 @@ def get_aws_security_group(group_id):
 
 def clear_security_group_rules(group):
     """
-    Remove all existing ingress and egress rules from the security group
+    Remove all existing ingress rules from the security group
 
     :param group:
     :return:
@@ -46,10 +46,7 @@ def clear_security_group_rules(group):
         group.revoke_ingress(IpPermissions=group.ip_permissions)
         print("Cleared all existing ingress rules")
 
-    # Revoke all egress rules // I think this one can remove, engress should be 
-    if group.ip_permissions_egress:
-        group.revoke_egress(IpPermissions=group.ip_permissions_egress)
-        print("Cleared all existing egress rules")
+    raise ConnectionError('Failed to revoke ingress rules')
 
 
 def add_ingress_rule(group, address, port, description):
@@ -93,49 +90,6 @@ def add_ingress_rule(group, address, port, description):
     group.authorize_ingress(IpPermissions=permissions)
     print(("Ingress rule from IP %s to Port %i has been added" % (address, port)))
 
-
-def add_egress_rule(group, address, port, description):
-    """
-    Add the IP address and port to the security group
-
-    :param group:
-    :param address:
-    :param port:
-    :param description:
-    :return:
-    """
-    if "." in address:
-        permissions = [
-            {
-                'IpProtocol': 'tcp',
-                'FromPort': port,
-                'ToPort': port,
-                'IpRanges': [
-                    {
-                        'CidrIp': address,
-                        'Description': description,
-                    }
-                ],
-            }
-        ]
-    else:
-        permissions = [
-            {
-                'IpProtocol': 'tcp',
-                'FromPort': port,
-                'ToPort': port,
-                'Ipv6Ranges': [
-                    {
-                        'CidrIpv6': address,
-                        'Description': description,
-                    }
-                ],
-            }
-        ]
-    group.authorize_egress(IpPermissions=permissions)
-    print(("Egress rule to IP %s from Port %i has been added" % (address, port)))
-
-
 def lambda_handler(event, context):
     """
     AWS lambda main func
@@ -148,10 +102,6 @@ def lambda_handler(event, context):
     if not ingress_ports:
         ingress_ports = [443]
 
-    egress_ports = [int(port) for port in os.environ['EGRESS_PORTS_LIST'].split(",")]
-    if not egress_ports:
-        egress_ports = [22]
-
     security_group = get_aws_security_group(os.environ['SECURITY_GROUP_ID'])
     ip_addresses = get_github_ip_list()
     description = "GitHub"
@@ -163,5 +113,3 @@ def lambda_handler(event, context):
     for ip_address in ip_addresses:
         for port in ingress_ports:
             add_ingress_rule(security_group, ip_address, port, description)
-        for port in egress_ports:
-            add_egress_rule(security_group, ip_address, port, description)
