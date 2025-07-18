@@ -32,24 +32,24 @@ def build_permission(ip, port, description):
         }
 
 def lambda_handler(event, context):
-    # === CONFIG ===
+    # Config
     SG_ID = os.environ["SECURITY_GROUP_ID"]
     PORT = int(os.environ.get("INGRESS_PORT", "443"))
     DESCRIPTION = "GitHub Webhook"
 
-    # === FETCH ===
+    # Fetch
     github_ips = fetch_github_hook_ips()
     sg = get_security_group(SG_ID)
 
     existing_permissions = sg.ip_permissions
     current_ips = set()
 
-    # === Loop: Track existing SG IPs (both valid + invalid) ===
+    # Loop: Track existing SG IPs (both valid + invalid or old rules)
     for perm in existing_permissions:
         if perm.get("IpProtocol") != "tcp" or perm.get("FromPort") != PORT:
             continue
 
-        # --- IPv4 ---
+        # IPv4
         for ip_range in perm.get("IpRanges", []):
             ip = ip_range.get("CidrIp")
             desc = ip_range.get("Description")
@@ -75,7 +75,7 @@ def lambda_handler(event, context):
                     'IpRanges': [ip_range]
                 }])
 
-        # --- IPv6 ---
+        # IPv6
         for ip_range in perm.get("Ipv6Ranges", []):
             ip = ip_range.get("CidrIpv6")
             desc = ip_range.get("Description")
@@ -100,7 +100,7 @@ def lambda_handler(event, context):
                     'Ipv6Ranges': [ip_range]
                 }])
 
-    # === Add missing GitHub IPs ===
+    # Add missing GitHub IPs
     to_add = github_ips - current_ips
     for ip in to_add:
         try:
