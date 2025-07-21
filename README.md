@@ -1,7 +1,6 @@
 """
 ===================================================================================
 Script: GitHub Webhook IP Sync to AWS Security Group
-Author: [Your Name or Team]
 Last Updated: July 2025
 
 Purpose:
